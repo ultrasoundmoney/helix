@@ -9184,6 +9184,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "merge-engine"
+version = "0.0.1"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-rpc-types",
+ "alloy-signer",
+ "alloy-signer-local",
+ "alloy-sol-types",
+ "bytes",
+ "clap",
+ "core_affinity",
+ "crossbeam-channel",
+ "ethereum_ssz",
+ "ethrex-blockchain",
+ "ethrex-common",
+ "ethrex-config",
+ "ethrex-crypto",
+ "ethrex-metrics",
+ "ethrex-p2p",
+ "ethrex-rlp",
+ "ethrex-rpc",
+ "ethrex-storage",
+ "ethrex-vm",
+ "eyre",
+ "helix-tcp-types",
+ "hex",
+ "rand 0.9.5",
+ "rayon",
+ "rustc-hash",
+ "secp256k1 0.30.0",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 1.0.69",
+ "tikv-jemallocator",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "uuid 1.24.1",
+ "zstd 0.13.3",
+]
+
+[[package]]
 name = "merkle_proof"
 version = "0.2.0"
 source = "git+https://github.com/sigp/lighthouse?rev=f064e9e061997c41658c3544da47627c6db92bc9#f064e9e061997c41658c3544da47627c6db92bc9"
