@@ -14,7 +14,7 @@ use ethrex_blockchain::{
     Blockchain,
     payload::{BuildPayloadArgs, HeadTransaction, PayloadBuildContext, create_payload},
 };
-use ethrex_common::types::{ELASTICITY_MULTIPLIER, TxKind, calculate_base_fee_per_gas};
+use ethrex_common::types::{ELASTICITY_MULTIPLIER, calculate_base_fee_per_gas};
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
 use helix_tcp_types::merging::{
@@ -189,12 +189,19 @@ impl MergeSession {
             .collateral_safe(&beneficiary_alloy)
             .ok_or(MergeError::UnknownCollateral(beneficiary_alloy))?;
 
-        // The trailing tx must be the proposer payment of exactly block_value.
-        // It is kept in place; the distribution tx is appended separately.
+        // The trailing tx must move exactly block_value, and it is kept in
+        // place; the distribution tx is appended separately.
+        //
+        // Its recipient is deliberately not checked here. A builder may pay the
+        // proposer directly, or call a forwarder that selfdestructs the value to
+        // the address in its calldata — the latter is what almost every mainnet
+        // builder does, and a `to == proposer` test rejects all of those blocks
+        // as bases. Checking the forwarder's address, calldata and code hash
+        // instead would only re-derive what the replay below already observes:
+        // the proposer's balance delta across this tx, which is zero for a
+        // forwarder aimed elsewhere, a codeless address, or a revert.
         let last_tx = base.txs.last().ok_or(MergeError::InvalidPayment)?;
-        let pays_proposer =
-            matches!(last_tx.tx.to(), TxKind::Call(to) if to == eaddr(slot.proposer_fee_recipient));
-        if !pays_proposer || au256(last_tx.tx.value()) != base.block_value {
+        if au256(last_tx.tx.value()) != base.block_value {
             return Err(MergeError::InvalidPayment);
         }
 
