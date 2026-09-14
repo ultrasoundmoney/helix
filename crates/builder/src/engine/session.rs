@@ -65,6 +65,7 @@ pub struct MergeStats {
     pub emissions: u64,
     pub emit_not_improved: u64,
     pub emit_no_revenue: u64,
+    pub emit_unprofitable: u64,
     pub emit_throttled: u64,
 }
 
@@ -666,6 +667,14 @@ impl MergeSession {
             relay_config.relay_fee_recipient,
             self.beneficiary_alloy,
         );
+
+        let relay_revenue =
+            updated_revenues.get(&relay_config.relay_fee_recipient).cloned().unwrap_or_default();
+        if relay_revenue <= estimated_payment_cost {
+            self.stats.emit_unprofitable += 1;
+            return Ok(EmitOutcome::NotImproved);
+        }
+
         let proposer_added_value =
             updated_revenues.get(&proposer_fee_recipient).cloned().unwrap_or_default();
         let proposer_value = self.base_value + proposer_added_value;
@@ -871,6 +880,7 @@ impl MergeSession {
             emissions = self.stats.emissions,
             emit_not_improved = self.stats.emit_not_improved,
             emit_no_revenue = self.stats.emit_no_revenue,
+            emit_unprofitable = self.stats.emit_unprofitable,
             emit_throttled = self.stats.emit_throttled,
             "merge session stats"
         );
