@@ -52,6 +52,7 @@ fn main() -> eyre::Result<()> {
             merging_config.emission.min_interval_ms,
         ),
         core: merging_config.cores.merge_worker,
+        disallow: Default::default(),
     };
     let _engine = MergeEngine::spawn(
         engine_config,

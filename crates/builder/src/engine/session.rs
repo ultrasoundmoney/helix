@@ -60,6 +60,7 @@ pub struct MergeStats {
     pub presim_revert_not_allowed: u64,
     pub presim_drop_not_allowed: u64,
     pub presim_execution_error: u64,
+    pub presim_disallowed: u64,
     pub orders_applied: u64,
     pub apply_rollbacks: u64,
     pub emissions: u64,
@@ -164,6 +165,8 @@ pub struct MergeSession {
     /// A throttled improvement is waiting; the worker retries after the
     /// spacing window even with no further inbound events.
     pub pending_emission: bool,
+    /// Some only when this slot's proposer registered the OFAC filter.
+    disallow: Option<Arc<FxHashSet<ethrex_common::Address>>>,
     stats: MergeStats,
     trace: MergeTraceV1,
 }
@@ -180,6 +183,7 @@ impl MergeSession {
         blockchain: Arc<Blockchain>,
         relay_config: &RelayConfigV1,
         checkpoint: Option<&ReplayCheckpoint>,
+        disallow: &Arc<FxHashSet<ethrex_common::Address>>,
     ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
         let v1 = &base.payload.payload_inner.payload_inner;
         let beneficiary_alloy = v1.fee_recipient;
@@ -336,6 +340,17 @@ impl MergeSession {
         let base_fee = ctx.payload.header.base_fee_per_gas;
         let mut proposer_balance_before_payment = None;
         let mut new_checkpoint = None;
+        let screening = slot.ofac_filtering.then_some(disallow);
+        if let Some(disallow) = screening {
+            for address in [beneficiary, proposer] {
+                if disallow.contains(&address) {
+                    return Err(MergeError::InvalidBaseBlock(format!(
+                        "base block pays a disallowed address {address:#x}"
+                    )));
+                }
+            }
+            ctx.vm.db.accessed_accounts = Some(FxHashSet::default());
+        }
         for (ix, decoded) in base.txs.iter().enumerate().skip(replay_from) {
             if decoded.tx.gas_limit() > ctx.remaining_gas {
                 return Err(MergeError::InvalidBaseBlock("base block exceeds gas limit".into()));
@@ -367,6 +382,17 @@ impl MergeSession {
                 .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
             tx_hashes.insert(decoded.hash);
         }
+        if let Some(disallow) = screening {
+            let touched = ctx.vm.db.accessed_accounts.take();
+            if let Some(address) =
+                touched.and_then(|accessed| accessed.into_iter().find(|a| disallow.contains(a)))
+            {
+                return Err(MergeError::InvalidBaseBlock(format!(
+                    "base block touches a disallowed address {address:#x}"
+                )));
+            }
+        }
+
         let new_checkpoint = new_checkpoint
             .expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
@@ -423,6 +449,7 @@ impl MergeSession {
             best_emitted: U256::ZERO,
             last_emit: None,
             pending_emission: false,
+            disallow: slot.ofac_filtering.then(|| disallow.clone()),
             stats: MergeStats::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
         };
@@ -526,8 +553,18 @@ impl MergeSession {
             return Ok(false);
         }
 
+        if let Some(disallow) = &self.disallow &&
+            order.txs.iter().any(|tx| disallow.contains(&tx.sender))
+        {
+            self.stats.presim_disallowed += 1;
+            return Ok(false);
+        }
+
         // Re-sim on the current state: earlier appends may have invalidated it.
         let mut sim_vm = self.ctx.vm.clone();
+        if self.disallow.is_some() {
+            sim_vm.db.accessed_accounts = Some(FxHashSet::default());
+        }
         let simulated = match simulate::simulate_order(
             &mut sim_vm,
             header,
@@ -540,6 +577,20 @@ impl MergeSession {
             Ok(simulated) => simulated,
             Err(_) => return Ok(false),
         };
+
+        // `accessed_accounts` records every `load_account` before it consults
+        // the cache, so this is the order's whole footprint at any call depth,
+        // including addresses the base replay had already loaded.
+        if let Some(disallow) = &self.disallow &&
+            sim_vm
+                .db
+                .accessed_accounts
+                .as_ref()
+                .is_some_and(|accessed| accessed.iter().any(|a| disallow.contains(a)))
+        {
+            self.stats.presim_disallowed += 1;
+            return Ok(false);
+        }
 
         // Snapshot for rollback.
         let vm_snapshot = self.ctx.vm.db.clone();
@@ -877,6 +928,7 @@ impl MergeSession {
             revert_not_allowed = self.stats.presim_revert_not_allowed,
             drop_not_allowed = self.stats.presim_drop_not_allowed,
             execution_error = self.stats.presim_execution_error,
+            disallowed = self.stats.presim_disallowed,
             emissions = self.stats.emissions,
             emit_not_improved = self.stats.emit_not_improved,
             emit_no_revenue = self.stats.emit_no_revenue,

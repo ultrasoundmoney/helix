@@ -4,6 +4,7 @@
 //! ethrex-related stays behind this boundary.
 
 pub mod convert;
+pub mod disallow;
 pub mod error;
 pub mod payment;
 pub mod session;
@@ -28,6 +29,7 @@ use helix_tcp_types::merging::{
     },
     relay_to_builder::{MergeableBlockV1, RevokeOrderV1, SlotStartV1},
 };
+use rustc_hash::FxHashSet;
 use ssz::Decode;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
@@ -55,6 +57,8 @@ pub enum EngineEvent {
     },
     /// Distribution policy; takes effect at the next `SlotStart`.
     RelayConfig(RelayConfigV1),
+    /// Refreshed sanctions list; applies to orders screened from here on.
+    Disallow(Arc<FxHashSet<ethrex_common::Address>>),
     SlotStart(SlotStartV1),
     SlotEnd {
         slot: u64,
@@ -122,6 +126,9 @@ pub struct MergeEngine {
     generation: u64,
     /// Latest relay config; snapshotted into the slot at `SlotStart`.
     relay_config: Option<RelayConfigV1>,
+    /// Sanctions list, refreshed out of band. Only consulted for slots whose
+    /// proposer registered the OFAC filter.
+    disallow: Arc<FxHashSet<ethrex_common::Address>>,
     slot: Option<SlotState>,
 }
 
@@ -137,6 +144,7 @@ impl MergeEngine {
         std::thread::Builder::new()
             .name("merge-engine".into())
             .spawn(move || {
+                let config_disallow = config.disallow.clone();
                 if let Some(core) = config.core &&
                     !core_affinity::set_for_current(core_affinity::CoreId { id: core })
                 {
@@ -150,6 +158,7 @@ impl MergeEngine {
                     out,
                     generation: 0,
                     relay_config: None,
+                    disallow: config_disallow,
                     slot: None,
                 };
                 info!("merge engine started");
@@ -238,6 +247,11 @@ impl MergeEngine {
                     "relay config received"
                 );
                 self.relay_config = Some(config);
+                false
+            }
+            EngineEvent::Disallow(disallow) => {
+                info!(count = disallow.len(), "disallow list updated");
+                self.disallow = disallow;
                 false
             }
             EngineEvent::SlotStart(msg) => {
@@ -417,6 +431,7 @@ impl MergeEngine {
                                 self.blockchain.clone(),
                                 &relay_config,
                                 checkpoint,
+                                &self.disallow,
                             )
                         };
                         match result {

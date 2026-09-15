@@ -34,6 +34,7 @@ hex.workspace = true
 helix-tcp-types.workspace = true
 rand.workspace = true
 rayon.workspace = true
+reqwest.workspace = true
 rustc-hash.workspace = true
 secp256k1.workspace = true
 serde.workspace = true

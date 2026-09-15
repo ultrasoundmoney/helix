@@ -14,6 +14,7 @@ pub struct SlotStartV1 {
     pub parent_hash: B256,
     pub proposer_fee_recipient: Address,
     pub parent_beacon_block_root: B256,
+    pub ofac_filtering: bool,
 }
 
 /// A forwarded builder submission carrying merging data. The builder derives

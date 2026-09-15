@@ -163,6 +163,7 @@ impl Fixture {
             min_value_increase_wei: U256::ZERO,
             min_emission_interval,
             core: None,
+            disallow: Default::default(),
         }
     }
 
@@ -184,6 +185,7 @@ impl Fixture {
             parent_hash: b256(self.genesis_hash),
             proposer_fee_recipient: self.proposer,
             parent_beacon_block_root: B256::ZERO,
+            ofac_filtering: false,
         }
     }
 
@@ -301,6 +303,7 @@ impl Fixture {
             out: output_tx,
             generation: 0,
             relay_config: None,
+            disallow: Default::default(),
             slot: None,
         };
         (engine, output_rx)

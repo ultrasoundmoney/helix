@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
 use alloy_signer_local::PrivateKeySigner;
 use helix_tcp_types::merging::control::RelayConfigV1;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::engine::session::{MergeSession, ReplayCheckpoint};
 
@@ -32,6 +32,8 @@ pub struct EngineConfig {
     pub min_emission_interval: Duration,
     /// Optional core pin for the engine worker thread.
     pub core: Option<usize>,
+    /// Sanctions list loaded at startup; refreshed later via `EngineEvent::Disallow`.
+    pub disallow: Arc<FxHashSet<ethrex_common::Address>>,
 }
 
 impl EngineConfig {
@@ -111,6 +113,7 @@ pub struct SlotState {
     pub parent_hash: B256,
     pub proposer_fee_recipient: Address,
     pub parent_beacon_block_root: B256,
+    pub ofac_filtering: bool,
     /// Relay config snapshot taken at slot start.
     pub relay_config: Option<RelayConfigV1>,
     pub blocks: FxHashMap<B256, PreparedBlock>,
@@ -166,6 +169,7 @@ impl SlotState {
             parent_hash: msg.parent_hash,
             proposer_fee_recipient: msg.proposer_fee_recipient,
             parent_beacon_block_root: msg.parent_beacon_block_root,
+            ofac_filtering: msg.ofac_filtering,
             relay_config: None,
             blocks: FxHashMap::default(),
             orders: Vec::new(),
