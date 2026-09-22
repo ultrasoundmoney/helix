@@ -68,6 +68,7 @@ pub struct MergeStats {
     pub emit_no_revenue: u64,
     pub emit_unprofitable: u64,
     pub emit_throttled: u64,
+    pub adjustment_related_balance_reads: u64,
 }
 
 impl MergeStats {
@@ -167,6 +168,9 @@ pub struct MergeSession {
     pub pending_emission: bool,
     /// Some only when this slot's proposer registered the OFAC filter.
     disallow: Option<Arc<FxHashSet<ethrex_common::Address>>>,
+    /// The slot's proposer fee recipient. Together with `beneficiary`, the
+    /// accounts bid adjustment rewrites after the block is built.
+    proposer: ethrex_common::Address,
     stats: MergeStats,
     trace: MergeTraceV1,
 }
@@ -450,6 +454,7 @@ impl MergeSession {
             last_emit: None,
             pending_emission: false,
             disallow: slot.ofac_filtering.then(|| disallow.clone()),
+            proposer,
             stats: MergeStats::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
         };
@@ -565,6 +570,7 @@ impl MergeSession {
         if self.disallow.is_some() {
             sim_vm.db.accessed_accounts = Some(FxHashSet::default());
         }
+        sim_vm.db.balance_reads = Some(FxHashSet::default());
         let simulated = match simulate::simulate_order(
             &mut sim_vm,
             header,
@@ -591,6 +597,10 @@ impl MergeSession {
             self.stats.presim_disallowed += 1;
             return Ok(false);
         }
+
+        let adjusted_balance_read = sim_vm.db.balance_reads.as_ref().and_then(|reads| {
+            [self.beneficiary, self.proposer].into_iter().find(|address| reads.contains(address))
+        });
 
         // Snapshot for rollback.
         let vm_snapshot = self.ctx.vm.db.clone();
@@ -662,6 +672,16 @@ impl MergeSession {
 
         // Commit bookkeeping.
         self.stats.orders_applied += 1;
+        if let Some(address) = adjusted_balance_read {
+            self.stats.adjustment_related_balance_reads += 1;
+            info!(
+                order = %order.order_id,
+                %address,
+                beneficiary = %self.beneficiary,
+                txs = ?applied_hashes,
+                "applied order reads a balance bid adjustment rewrites"
+            );
+        }
         self.tx_hashes.extend(applied_hashes.iter().copied());
         self.applied_orders.insert(order.order_id);
         self.included_order_ids.push(order.order_id);
@@ -934,6 +954,7 @@ impl MergeSession {
             emit_no_revenue = self.stats.emit_no_revenue,
             emit_unprofitable = self.stats.emit_unprofitable,
             emit_throttled = self.stats.emit_throttled,
+            adjustment_related_balance_reads = self.stats.adjustment_related_balance_reads,
             "merge session stats"
         );
     }
