@@ -926,7 +926,10 @@ impl MergeSession {
             trace: self.trace,
         });
 
-        if let Some(adjustment) = &engine_config.adjustment {
+        // Testing only: trigger adjusment every 5th.
+        if let Some(adjustment) = &engine_config.adjustment &&
+            self.stats.emissions % 5 == 1
+        {
             let snapshot = AdjustmentSnapshot {
                 parent_hash: ctx.payload.header.parent_hash,
                 parent_beacon_block_root: ctx.payload.header.parent_beacon_block_root.map(b256),
