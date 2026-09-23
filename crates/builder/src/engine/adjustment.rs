@@ -15,7 +15,7 @@ use ethrex_storage::{Store, error::StoreError};
 use ethrex_trie::{Trie, TrieError};
 use helix_tcp_types::merging::builder_to_relay::MergedBlockV1;
 
-use crate::engine::convert::b256;
+use crate::engine::convert::{au256, b256};
 
 pub struct AdjustmentConfig {
     /// A funded account standing in for the relay's fee payer.
@@ -26,6 +26,7 @@ pub struct AdjustmentConfig {
 
 pub struct AdjustmentSnapshot {
     pub parent_hash: H256,
+    pub parent_beacon_block_root: Option<B256>,
     pub account_updates: Vec<AccountUpdate>,
     pub transactions: Vec<Transaction>,
     pub receipts: Vec<Receipt>,
@@ -69,6 +70,15 @@ pub struct AdjustmentProofs {
 }
 
 impl AdjustmentProofs {
+    pub fn account(&self, address: Address) -> Result<Option<(U256, u64)>, AdjustmentProofError> {
+        let Some(encoded) = self.state_trie.get(&account_path(address))? else {
+            return Ok(None);
+        };
+        let account = AccountState::decode(&encoded)?;
+
+        Ok(Some((au256(account.balance), account.nonce)))
+    }
+
     /// The post-state root with the given accounts' balance and nonce replaced.
     pub fn state_root_with(
         mut self,

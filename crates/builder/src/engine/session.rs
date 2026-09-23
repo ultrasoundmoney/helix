@@ -27,7 +27,7 @@ use tracing::{debug, info};
 use crate::{
     engine::{
         adjustment::AdjustmentSnapshot,
-        convert::{au256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4},
+        convert::{au256, b256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4},
         error::{MergeError, SimulationError},
         payment::{self, DistributionConfig, PaymentInputs},
         simulate::{self, balance_of},
@@ -929,6 +929,7 @@ impl MergeSession {
         if let Some(adjustment) = &engine_config.adjustment {
             let snapshot = AdjustmentSnapshot {
                 parent_hash: ctx.payload.header.parent_hash,
+                parent_beacon_block_root: ctx.payload.header.parent_beacon_block_root.map(b256),
                 account_updates: std::mem::take(&mut ctx.account_updates),
                 transactions: std::mem::take(&mut ctx.payload.body.transactions),
                 receipts: std::mem::take(&mut ctx.receipts),
