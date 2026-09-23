@@ -3,6 +3,7 @@
 //! session, and streams merged blocks / rejects back. Everything
 //! ethrex-related stays behind this boundary.
 
+pub mod adjustment;
 pub mod convert;
 pub mod disallow;
 pub mod error;
@@ -432,6 +433,7 @@ impl MergeEngine {
                                 &relay_config,
                                 checkpoint,
                                 &self.disallow,
+                                self.config.adjustment.as_ref().map(|adjustment| adjustment.fee_payer),
                             )
                         };
                         match result {

@@ -6,7 +6,10 @@ use alloy_signer_local::PrivateKeySigner;
 use helix_tcp_types::merging::control::RelayConfigV1;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::engine::session::{MergeSession, ReplayCheckpoint};
+use crate::engine::{
+    adjustment::AdjustmentConfig,
+    session::{MergeSession, ReplayCheckpoint},
+};
 
 /// Sessions kept alive after a base switch, resumed instantly when the
 /// relay's top bid flips back instead of re-replaying the base block.
@@ -34,6 +37,9 @@ pub struct EngineConfig {
     pub core: Option<usize>,
     /// Sanctions list loaded at startup; refreshed later via `EngineEvent::Disallow`.
     pub disallow: Arc<FxHashSet<ethrex_common::Address>>,
+    /// Testing only: skips orders that would break a bid adjustment and
+    /// snapshots each emission for a dry run.
+    pub adjustment: Option<AdjustmentConfig>,
 }
 
 impl EngineConfig {

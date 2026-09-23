@@ -5,7 +5,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, U256, keccak256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use ethrex_blockchain::{
@@ -27,6 +27,7 @@ use tokio::sync::watch;
 use crate::{
     engine::{
         EngineEvent, EngineOutput, MergeEngine,
+        adjustment::{AdjustmentConfig, generate_proofs},
         convert::{aaddr, b256, block_to_payload_v3, eaddr},
         types::EngineConfig,
     },
@@ -164,6 +165,7 @@ impl Fixture {
             min_emission_interval,
             core: None,
             disallow: Default::default(),
+            adjustment: None,
         }
     }
 
@@ -505,6 +507,47 @@ async fn revoke_removes_pooled_order_before_it_applies() {
         output_rx.try_recv().is_err(),
         "base alone with its only order revoked before activation must not emit"
     );
+}
+
+/// The rebuilt post-state is the merged block's own, and every proof hangs
+/// off the block's roots, with the base payment in the middle of the block.
+#[tokio::test(flavor = "multi_thread")]
+async fn adjustment_proofs_match_the_emitted_block() {
+    let fixture = Fixture::new().await;
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let donor_msg = fixture.donor(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+
+    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
+    let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded(1);
+    engine.config.adjustment =
+        Some(AdjustmentConfig { fee_payer: fixture.signers[7].address(), snapshots: snapshot_tx });
+
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_msg, 1));
+    engine.handle_event(mergeable_event(&donor_msg, 2));
+    engine.handle_event(activate_event(base_block_hash));
+    engine.merge_pass();
+
+    let merged = expect_merged(output_rx.try_recv().expect("emission"));
+    let snapshot = snapshot_rx.try_recv().expect("snapshot");
+    let payload = &merged.execution_payload.payload_inner.payload_inner;
+
+    // [user tx, payment, donor order, distribution]
+    assert_eq!(snapshot.payment_index, 1);
+    assert_eq!(payload.transactions.len(), 4);
+
+    let proofs = generate_proofs(&fixture.store, &snapshot).unwrap();
+    assert_eq!(proofs.placeholder_gas_used, 21_000);
+
+    let root_of = |proof: &[alloy_primitives::Bytes]| keccak256(&proof[0]);
+    assert_eq!(root_of(&proofs.builder_proof), payload.state_root);
+    assert_eq!(root_of(&proofs.fee_payer_proof), payload.state_root);
+    assert_eq!(root_of(&proofs.proposer_proof), payload.state_root);
+    assert_eq!(root_of(&proofs.receipt_proof), payload.receipts_root);
+    assert_eq!(root_of(&proofs.transaction_proof), proofs.transactions_root);
+
+    assert_eq!(proofs.state_root_with([]).unwrap(), payload.state_root);
 }
 
 /// Revoking an order the live session already applied can't be reflected in

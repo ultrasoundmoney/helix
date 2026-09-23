@@ -53,6 +53,7 @@ fn main() -> eyre::Result<()> {
         ),
         core: merging_config.cores.merge_worker,
         disallow: Default::default(),
+        adjustment: None,
     };
     let _engine = MergeEngine::spawn(
         engine_config,

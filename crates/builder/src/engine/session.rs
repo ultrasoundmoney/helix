@@ -26,6 +26,7 @@ use tracing::{debug, info};
 
 use crate::{
     engine::{
+        adjustment::AdjustmentSnapshot,
         convert::{au256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4},
         error::{MergeError, SimulationError},
         payment::{self, DistributionConfig, PaymentInputs},
@@ -69,6 +70,7 @@ pub struct MergeStats {
     pub emit_unprofitable: u64,
     pub emit_throttled: u64,
     pub adjustment_related_balance_reads: u64,
+    pub adjustment_conflicts: u64,
 }
 
 impl MergeStats {
@@ -140,6 +142,8 @@ pub struct MergeSession {
     beneficiary: ethrex_common::Address,
     beneficiary_alloy: Address,
     base_value: U256,
+    /// The base block's proposer payment.
+    payment_index: usize,
     builder_safe: Address,
     /// Live context: base replay + appended orders. Never finalized (emission
     /// finalizes a clone), so the session stays extendable.
@@ -171,6 +175,7 @@ pub struct MergeSession {
     /// The slot's proposer fee recipient. Together with `beneficiary`, the
     /// accounts bid adjustment rewrites after the block is built.
     proposer: ethrex_common::Address,
+    adjustment_fee_payer: Option<ethrex_common::Address>,
     stats: MergeStats,
     trace: MergeTraceV1,
 }
@@ -188,6 +193,7 @@ impl MergeSession {
         relay_config: &RelayConfigV1,
         checkpoint: Option<&ReplayCheckpoint>,
         disallow: &Arc<FxHashSet<ethrex_common::Address>>,
+        adjustment_fee_payer: Option<Address>,
     ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
         let v1 = &base.payload.payload_inner.payload_inner;
         let beneficiary_alloy = v1.fee_recipient;
@@ -435,6 +441,7 @@ impl MergeSession {
             beneficiary,
             beneficiary_alloy,
             base_value: base.block_value,
+            payment_index: last_ix,
             builder_safe,
             ctx,
             blockchain,
@@ -455,6 +462,7 @@ impl MergeSession {
             pending_emission: false,
             disallow: slot.ofac_filtering.then(|| disallow.clone()),
             proposer,
+            adjustment_fee_payer: adjustment_fee_payer.map(eaddr),
             stats: MergeStats::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
         };
@@ -567,7 +575,7 @@ impl MergeSession {
 
         // Re-sim on the current state: earlier appends may have invalidated it.
         let mut sim_vm = self.ctx.vm.clone();
-        if self.disallow.is_some() {
+        if self.disallow.is_some() || self.adjustment_fee_payer.is_some() {
             sim_vm.db.accessed_accounts = Some(FxHashSet::default());
         }
         sim_vm.db.balance_reads = Some(FxHashSet::default());
@@ -601,6 +609,24 @@ impl MergeSession {
         let adjusted_balance_read = sim_vm.db.balance_reads.as_ref().and_then(|reads| {
             [self.beneficiary, self.proposer].into_iter().find(|address| reads.contains(address))
         });
+
+        // Adjustment rewrites these accounts. Every tx loads the coinbase, so
+        // for it only balance reads and sends count.
+        if let Some(fee_payer) = self.adjustment_fee_payer {
+            let touches_proposer_or_fee_payer =
+                sim_vm.db.accessed_accounts.as_ref().is_some_and(|accessed| {
+                    accessed.contains(&self.proposer) || accessed.contains(&fee_payer)
+                });
+            let sent_by_builder = order.txs.iter().any(|tx| tx.sender == self.beneficiary);
+
+            if touches_proposer_or_fee_payer ||
+                sent_by_builder ||
+                adjusted_balance_read == Some(self.beneficiary)
+            {
+                self.stats.adjustment_conflicts += 1;
+                return Ok(false);
+            }
+        }
 
         // Snapshot for rollback.
         let vm_snapshot = self.ctx.vm.db.clone();
@@ -884,7 +910,7 @@ impl MergeSession {
             "merged block finalized"
         );
 
-        Ok(EmitOutcome::Emitted(Box::new(MergedBlockV1 {
+        let merged = Box::new(MergedBlockV1 {
             slot: slot_number,
             response_id: 0, // stamped by the server tile
             base_block_hash: self.base_block_hash,
@@ -898,7 +924,26 @@ impl MergeSession {
             builder_inclusions,
             included_order_ids: self.included_order_ids.clone(),
             trace: self.trace,
-        })))
+        });
+
+        if let Some(adjustment) = &engine_config.adjustment {
+            let snapshot = AdjustmentSnapshot {
+                parent_hash: ctx.payload.header.parent_hash,
+                account_updates: std::mem::take(&mut ctx.account_updates),
+                transactions: std::mem::take(&mut ctx.payload.body.transactions),
+                receipts: std::mem::take(&mut ctx.receipts),
+                payment_index: self.payment_index,
+                builder: self.beneficiary_alloy,
+                proposer: proposer_fee_recipient,
+                fee_payer: adjustment.fee_payer,
+                block: (*merged).clone(),
+            };
+            if adjustment.snapshots.try_send(snapshot).is_err() {
+                debug!(base_block_hash = %self.base_block_hash, "adjustment snapshot dropped");
+            }
+        }
+
+        Ok(EmitOutcome::Emitted(merged))
     }
 
     fn available_gas(&self) -> u64 {
@@ -955,6 +1000,7 @@ impl MergeSession {
             emit_unprofitable = self.stats.emit_unprofitable,
             emit_throttled = self.stats.emit_throttled,
             adjustment_related_balance_reads = self.stats.adjustment_related_balance_reads,
+            adjustment_conflicts = self.stats.adjustment_conflicts,
             "merge session stats"
         );
     }

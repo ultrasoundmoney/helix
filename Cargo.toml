@@ -56,6 +56,7 @@ ethrex-p2p = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe425
 ethrex-rlp = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
 ethrex-rpc = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
 ethrex-storage = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", features = ["rocksdb"] }
+ethrex-trie = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
 ethrex-vm = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", default-features = false, features = ["secp256k1", "c-kzg"] }
 
 eyre = "0.6.12"
