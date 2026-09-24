@@ -46,18 +46,18 @@ ethers = "2.0.14"
 # ethrex-crypto's `aws-lc-rs` feature, whose cc >=1.2.26 requirement conflicts with
 # reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
 # assembled from the library crates instead.
-ethrex-blockchain = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
-ethrex-common = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", default-features = false, features = ["secp256k1", "c-kzg"] }
-ethrex-config = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
+ethrex-blockchain = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
+ethrex-common = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-config = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
-ethrex-crypto = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
-ethrex-metrics = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
-ethrex-p2p = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", features = ["c-kzg", "rocksdb", "metrics"] }
-ethrex-rlp = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
-ethrex-rpc = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
-ethrex-storage = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", features = ["rocksdb"] }
-ethrex-trie = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007" }
-ethrex-vm = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "eefe42529495b32aa8821bf938b81c6eb9bec007", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-crypto = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-metrics = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5" }
+ethrex-p2p = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5", features = ["c-kzg", "rocksdb", "metrics"] }
+ethrex-rlp = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5" }
+ethrex-rpc = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5" }
+ethrex-storage = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5", features = ["rocksdb"] }
+ethrex-trie = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5" }
+ethrex-vm = { git = "https://github.com/ultrasoundmoney/ethrex", rev = "50bc26a8327c0f0230ebdb2bf097deb8270177c5", default-features = false, features = ["secp256k1", "c-kzg"] }
 
 eyre = "0.6.12"
 aws-sdk-s3 = "=1.35.0"
