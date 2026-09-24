@@ -27,7 +27,7 @@ use tokio::sync::watch;
 use crate::{
     engine::{
         EngineEvent, EngineOutput, MergeEngine,
-        adjustment::{AdjustmentConfig, generate_proofs},
+        adjustment::AdjustmentConfig,
         convert::{aaddr, b256, block_to_payload_v3, eaddr},
         types::EngineConfig,
     },
@@ -519,8 +519,11 @@ async fn adjustment_proofs_match_the_emitted_block() {
 
     let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded(1);
-    engine.config.adjustment =
-        Some(AdjustmentConfig { fee_payer: fixture.signers[7].address(), snapshots: snapshot_tx });
+    engine.config.adjustment = Some(AdjustmentConfig {
+        fee_payer: fixture.signers[7].address(),
+        whitelisted_contracts: Default::default(),
+        snapshots: snapshot_tx,
+    });
 
     engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
     engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
@@ -537,7 +540,7 @@ async fn adjustment_proofs_match_the_emitted_block() {
     assert_eq!(snapshot.payment_index, 1);
     assert_eq!(payload.transactions.len(), 4);
 
-    let proofs = generate_proofs(&fixture.store, &snapshot).unwrap();
+    let proofs = snapshot.proofs.unwrap();
     assert_eq!(proofs.placeholder_gas_used, 21_000);
 
     let root_of = |proof: &[alloy_primitives::Bytes]| keccak256(&proof[0]);

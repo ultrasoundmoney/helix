@@ -26,7 +26,7 @@ use tracing::{debug, info};
 
 use crate::{
     engine::{
-        adjustment::AdjustmentSnapshot,
+        adjustment::{AdjustmentSnapshot, generate_proofs},
         convert::{au256, b256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4},
         error::{MergeError, SimulationError},
         payment::{self, DistributionConfig, PaymentInputs},
@@ -874,9 +874,23 @@ impl MergeSession {
         self.blockchain
             .apply_withdrawals(&mut ctx)
             .map_err(|e| MergeError::Internal(format!("apply withdrawals: {e}")))?;
-        self.blockchain
-            .finalize_payload(&mut ctx)
-            .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?;
+        // Testing only: keep the post-state trie to generate adjustment proofs
+        // every 5th emission.
+        let adjustment =
+            engine_config.adjustment.as_ref().filter(|_| self.stats.emissions % 5 == 0);
+        let state_trie = match adjustment {
+            Some(_) => Some(
+                self.blockchain
+                    .finalize_payload_with_state_trie(&mut ctx)
+                    .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?,
+            ),
+            None => {
+                self.blockchain
+                    .finalize_payload(&mut ctx)
+                    .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?;
+                None
+            }
+        };
 
         self.trace.finalize_ns = utcnow_ns();
 
@@ -926,21 +940,25 @@ impl MergeSession {
             trace: self.trace,
         });
 
-        // Testing only: trigger adjusment every 5th.
-        if let Some(adjustment) = &engine_config.adjustment &&
-            self.stats.emissions % 5 == 1
+        if let Some(adjustment) = adjustment &&
+            let Some(state_trie) = state_trie
         {
             let snapshot = AdjustmentSnapshot {
-                parent_hash: ctx.payload.header.parent_hash,
                 parent_beacon_block_root: ctx.payload.header.parent_beacon_block_root.map(b256),
-                account_updates: std::mem::take(&mut ctx.account_updates),
-                transactions: std::mem::take(&mut ctx.payload.body.transactions),
-                receipts: std::mem::take(&mut ctx.receipts),
                 payment_index: self.payment_index,
                 builder: self.beneficiary_alloy,
                 proposer: proposer_fee_recipient,
                 fee_payer: adjustment.fee_payer,
                 block: (*merged).clone(),
+                proofs: generate_proofs(
+                    state_trie,
+                    &ctx.payload.body.transactions,
+                    &ctx.receipts,
+                    self.payment_index,
+                    self.beneficiary_alloy,
+                    proposer_fee_recipient,
+                    adjustment,
+                ),
             };
             if adjustment.snapshots.try_send(snapshot).is_err() {
                 debug!(base_block_hash = %self.base_block_hash, "adjustment snapshot dropped");

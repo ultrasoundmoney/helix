@@ -5118,7 +5118,7 @@ dependencies = [
 [[package]]
 name = "ethrex-blockchain"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "bytes",
  "crossbeam",
@@ -5140,7 +5140,7 @@ dependencies = [
 [[package]]
 name = "ethrex-common"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -5170,7 +5170,7 @@ dependencies = [
 [[package]]
 name = "ethrex-config"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "ethrex-common",
  "ethrex-p2p",
@@ -5205,7 +5205,7 @@ dependencies = [
 [[package]]
 name = "ethrex-levm"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
@@ -5223,7 +5223,7 @@ dependencies = [
 [[package]]
 name = "ethrex-metrics"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "axum 0.8.9",
  "ethrex-common",
@@ -5239,7 +5239,7 @@ dependencies = [
 [[package]]
 name = "ethrex-p2p"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5283,7 +5283,7 @@ dependencies = [
 [[package]]
 name = "ethrex-rlp"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "bytes",
  "ethereum-types 0.15.1",
@@ -5293,7 +5293,7 @@ dependencies = [
 [[package]]
 name = "ethrex-rpc"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "axum 0.8.9",
  "axum-extra",
@@ -5333,7 +5333,7 @@ dependencies = [
 [[package]]
 name = "ethrex-storage"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5356,7 +5356,7 @@ dependencies = [
 [[package]]
 name = "ethrex-trie"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5375,7 +5375,7 @@ dependencies = [
 [[package]]
 name = "ethrex-vm"
 version = "20.0.0"
-source = "git+https://github.com/ultrasoundmoney/ethrex?rev=50bc26a8327c0f0230ebdb2bf097deb8270177c5#50bc26a8327c0f0230ebdb2bf097deb8270177c5"
+source = "git+https://github.com/ultrasoundmoney/ethrex?rev=b81ddf09753c3df360e63a30f59fd8eb4497b764#b81ddf09753c3df360e63a30f59fd8eb4497b764"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
