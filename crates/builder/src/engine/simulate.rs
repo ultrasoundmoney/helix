@@ -144,3 +144,13 @@ pub fn balance_of(
         .map(|account| account.info.balance)
         .map_err(|e| SimulationError::Execution(e.to_string()))
 }
+
+pub fn nonce_and_balance(
+    vm: &mut Evm,
+    address: ethrex_common::Address,
+) -> Result<(u64, ethrex_common::U256), SimulationError> {
+    vm.db
+        .get_account(address)
+        .map(|account| (account.info.nonce, account.info.balance))
+        .map_err(|e| SimulationError::Execution(e.to_string()))
+}

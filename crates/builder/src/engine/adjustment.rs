@@ -1,11 +1,8 @@
-use std::{collections::HashSet, time::Instant};
+use std::time::Instant;
 
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use crossbeam_channel::Sender;
-use ethrex_common::{
-    constants::EMPTY_KECCAK_HASH,
-    types::{AccountState, Receipt, Transaction},
-};
+use ethrex_common::types::{AccountState, Receipt, Transaction};
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode, error::RLPDecodeError};
 use ethrex_trie::{Trie, TrieError};
@@ -15,8 +12,6 @@ use crate::engine::convert::{au256, b256};
 
 pub struct AdjustmentConfig {
     pub fee_payer: Address,
-    /// Proposer contracts adjusted despite having code.
-    pub whitelisted_contracts: HashSet<Address>,
     /// Dropped when full.
     pub snapshots: Sender<AdjustmentSnapshot>,
 }
@@ -24,7 +19,7 @@ pub struct AdjustmentConfig {
 pub struct AdjustmentSnapshot {
     pub parent_beacon_block_root: Option<B256>,
     pub payment_index: usize,
-    /// The coinbase.
+    /// The proposer payment's sender.
     pub builder: Address,
     pub proposer: Address,
     pub fee_payer: Address,
@@ -34,8 +29,6 @@ pub struct AdjustmentSnapshot {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdjustmentProofError {
-    #[error("{0} has code")]
-    HasCode(Address),
     #[error("payment index {0} out of range")]
     PaymentIndexOutOfRange(usize),
     #[error("trie: {0}")]
@@ -107,15 +100,6 @@ pub fn generate_proofs(
         .checked_sub(1)
         .map_or(0, |previous| receipts[previous].cumulative_gas_used);
 
-    let proposer_whitelisted = config.whitelisted_contracts.contains(&proposer);
-    for (address, whitelisted) in
-        [(builder, false), (config.fee_payer, false), (proposer, proposer_whitelisted)]
-    {
-        if !whitelisted && has_code(&state_trie, address)? {
-            return Err(AdjustmentProofError::HasCode(address));
-        }
-    }
-
     let account_proof = |address: Address| state_trie.get_proof(&account_path(address));
     let builder_proof = into_bytes(account_proof(builder)?);
     let fee_payer_proof = into_bytes(account_proof(config.fee_payer)?);
@@ -146,15 +130,6 @@ pub fn generate_proofs(
         payment_proofs_us,
         state_trie,
     })
-}
-
-fn has_code(state_trie: &Trie, address: Address) -> Result<bool, AdjustmentProofError> {
-    let account = state_trie
-        .get(&account_path(address))?
-        .map(|encoded| AccountState::decode(&encoded))
-        .transpose()?;
-
-    Ok(account.is_some_and(|account| account.code_hash != *EMPTY_KECCAK_HASH))
 }
 
 fn account_path(address: Address) -> Vec<u8> {

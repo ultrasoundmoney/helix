@@ -510,7 +510,7 @@ async fn revoke_removes_pooled_order_before_it_applies() {
 }
 
 /// The rebuilt post-state is the merged block's own, and every proof hangs
-/// off the block's roots, with the base payment in the middle of the block.
+/// off the block's roots, with the base payment last in the block.
 #[tokio::test(flavor = "multi_thread")]
 async fn adjustment_proofs_match_the_emitted_block() {
     let fixture = Fixture::new().await;
@@ -521,7 +521,6 @@ async fn adjustment_proofs_match_the_emitted_block() {
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded(1);
     engine.config.adjustment = Some(AdjustmentConfig {
         fee_payer: fixture.signers[7].address(),
-        whitelisted_contracts: Default::default(),
         snapshots: snapshot_tx,
     });
 
@@ -536,9 +535,13 @@ async fn adjustment_proofs_match_the_emitted_block() {
     let snapshot = snapshot_rx.try_recv().expect("snapshot");
     let payload = &merged.execution_payload.payload_inner.payload_inner;
 
-    // [user tx, payment, donor order, distribution]
-    assert_eq!(snapshot.payment_index, 1);
+    // [user tx, donor order, distribution, payment]
+    assert_eq!(snapshot.payment_index, 3);
     assert_eq!(payload.transactions.len(), 4);
+    assert_eq!(
+        payload.transactions[3],
+        base_msg.execution_payload.payload_inner.payload_inner.transactions[1]
+    );
 
     let proofs = snapshot.proofs.unwrap();
     assert_eq!(proofs.placeholder_gas_used, 21_000);

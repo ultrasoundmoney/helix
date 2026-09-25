@@ -1,6 +1,7 @@
 //! Per-base-block merge session: validates and replays the activated base
 //! block onto parent state, greedily appends profitable orders, and emits
-//! improved `MergedBlockV1`s with the Safe multiSend distribution appended.
+//! improved `MergedBlockV1`s with the Safe multiSend distribution appended,
+//! followed by the base's proposer payment.
 //! Port of the simulator's `merge_block` / `BlockBuilder` /
 //! `append_greedily_until_gas_limit` (`crates/simulator/src/block_merging/mod.rs`)
 //! onto ethrex's `PayloadBuildContext`.
@@ -27,12 +28,15 @@ use tracing::{debug, info};
 use crate::{
     engine::{
         adjustment::{AdjustmentSnapshot, generate_proofs},
-        convert::{au256, b256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4},
+        convert::{
+            aaddr, au256, b256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4,
+        },
         error::{MergeError, SimulationError},
         payment::{self, DistributionConfig, PaymentInputs},
-        simulate::{self, balance_of},
+        simulate::{self, balance_of, nonce_and_balance},
         types::{
-            EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder, SlotState,
+            DecodedTx, EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder,
+            SlotState,
         },
     },
     utils::utcnow_ns,
@@ -69,8 +73,7 @@ pub struct MergeStats {
     pub emit_no_revenue: u64,
     pub emit_unprofitable: u64,
     pub emit_throttled: u64,
-    pub adjustment_related_balance_reads: u64,
-    pub adjustment_conflicts: u64,
+    pub payment_conflicts: u64,
 }
 
 impl MergeStats {
@@ -142,14 +145,16 @@ pub struct MergeSession {
     beneficiary: ethrex_common::Address,
     beneficiary_alloy: Address,
     base_value: U256,
-    /// The base block's proposer payment.
-    payment_index: usize,
+    /// The base block's trailing tx, replayed last on emission.
+    proposer_payment: Arc<DecodedTx>,
     builder_safe: Address,
-    /// Live context: base replay + appended orders. Never finalized (emission
-    /// finalizes a clone), so the session stays extendable.
+    /// Live context: base replay up to the proposer payment + appended orders.
+    /// Never finalized (emission finalizes a clone), so the session stays
+    /// extendable.
     ctx: PayloadBuildContext,
     blockchain: Arc<Blockchain>,
-    /// Block gas limit minus the reserved distribution gas.
+    /// Block gas limit minus the reserved distribution gas and the proposer
+    /// payment's gas limit.
     gas_soft_limit: u64,
     max_blobs: u64,
     blob_count: u64,
@@ -172,8 +177,7 @@ pub struct MergeSession {
     pub pending_emission: bool,
     /// Some only when this slot's proposer registered the OFAC filter.
     disallow: Option<Arc<FxHashSet<ethrex_common::Address>>>,
-    /// The slot's proposer fee recipient. Together with `beneficiary`, the
-    /// accounts bid adjustment rewrites after the block is built.
+    /// The slot's proposer fee recipient.
     proposer: ethrex_common::Address,
     adjustment_fee_payer: Option<ethrex_common::Address>,
     stats: MergeStats,
@@ -204,8 +208,9 @@ impl MergeSession {
             .collateral_safe(&beneficiary_alloy)
             .ok_or(MergeError::UnknownCollateral(beneficiary_alloy))?;
 
-        // The trailing tx must move exactly block_value, and it is kept in
-        // place; the distribution tx is appended separately.
+        // The trailing tx must move exactly block_value. It moves to the end of
+        // the merged block, after the distribution tx, so nothing executes
+        // after it and bid adjustment can rewrite it alone.
         //
         // Its recipient is deliberately not checked here. A builder may pay the
         // proposer directly, or call a forwarder that selfdestructs the value to
@@ -228,7 +233,8 @@ impl MergeSession {
                 "insufficient gas headroom for distribution: {base_gas_left}"
             )));
         }
-        let gas_soft_limit = v1.gas_limit - distribution_gas_limit;
+        let gas_soft_limit =
+            (v1.gas_limit - distribution_gas_limit).saturating_sub(last_tx.gas_limit);
 
         let chain_config = store.get_chain_config();
         if chain_config.is_amsterdam_activated(v1.timestamp) {
@@ -430,6 +436,13 @@ impl MergeSession {
             return Err(MergeError::InvalidPayment);
         }
 
+        // The session extends the state right before the proposer payment,
+        // which emission replays last. That needs a second clone: `ctx` already
+        // ran the payment to validate the base, and the checkpoint must stay
+        // untouched for resubmissions to reuse.
+        let mut ctx = new_checkpoint.ctx.clone();
+        ctx.vm.db.accessed_accounts = None;
+
         // Merged revenue is measured as the beneficiary balance delta from
         // this point on (after the base replay, matching the simulator).
         let initial_beneficiary_balance = balance_of(&mut ctx.vm, beneficiary)
@@ -441,7 +454,7 @@ impl MergeSession {
             beneficiary,
             beneficiary_alloy,
             base_value: base.block_value,
-            payment_index: last_ix,
+            proposer_payment: last_tx.clone(),
             builder_safe,
             ctx,
             blockchain,
@@ -575,10 +588,9 @@ impl MergeSession {
 
         // Re-sim on the current state: earlier appends may have invalidated it.
         let mut sim_vm = self.ctx.vm.clone();
-        if self.disallow.is_some() || self.adjustment_fee_payer.is_some() {
+        if self.disallow.is_some() {
             sim_vm.db.accessed_accounts = Some(FxHashSet::default());
         }
-        sim_vm.db.balance_reads = Some(FxHashSet::default());
         let simulated = match simulate::simulate_order(
             &mut sim_vm,
             header,
@@ -606,24 +618,19 @@ impl MergeSession {
             return Ok(false);
         }
 
-        let adjusted_balance_read = sim_vm.db.balance_reads.as_ref().and_then(|reads| {
-            [self.beneficiary, self.proposer].into_iter().find(|address| reads.contains(address))
-        });
-
-        // Adjustment rewrites these accounts. Every tx loads the coinbase, so
-        // for it only balance reads and sends count.
-        if let Some(fee_payer) = self.adjustment_fee_payer {
-            let touches_proposer_or_fee_payer =
-                sim_vm.db.accessed_accounts.as_ref().is_some_and(|accessed| {
-                    accessed.contains(&self.proposer) || accessed.contains(&fee_payer)
-                });
-            let sent_by_builder = order.txs.iter().any(|tx| tx.sender == self.beneficiary);
-
-            if touches_proposer_or_fee_payer ||
-                sent_by_builder ||
-                adjusted_balance_read == Some(self.beneficiary)
-            {
-                self.stats.adjustment_conflicts += 1;
+        // The proposer payment runs last under its signed nonce, and an adjusted
+        // one under the fee payer's. A nonce moves on a send or an EIP-7702
+        // authorization; a balance drops only through code, e.g. a delegation.
+        for address in [Some(self.proposer_payment.sender), self.adjustment_fee_payer]
+            .into_iter()
+            .flatten()
+        {
+            let (nonce, balance) = nonce_and_balance(&mut self.ctx.vm, address)
+                .map_err(|e| MergeError::Internal(e.to_string()))?;
+            let (nonce_after, balance_after) = nonce_and_balance(&mut sim_vm, address)
+                .map_err(|e| MergeError::Internal(e.to_string()))?;
+            if nonce_after != nonce || balance_after < balance {
+                self.stats.payment_conflicts += 1;
                 return Ok(false);
             }
         }
@@ -698,16 +705,6 @@ impl MergeSession {
 
         // Commit bookkeeping.
         self.stats.orders_applied += 1;
-        if let Some(address) = adjusted_balance_read {
-            self.stats.adjustment_related_balance_reads += 1;
-            info!(
-                order = %order.order_id,
-                %address,
-                beneficiary = %self.beneficiary,
-                txs = ?applied_hashes,
-                "applied order reads a balance bid adjustment rewrites"
-            );
-        }
         self.tx_hashes.extend(applied_hashes.iter().copied());
         self.applied_orders.insert(order.order_id);
         self.included_order_ids.push(order.order_id);
@@ -804,8 +801,14 @@ impl MergeSession {
         // session stays extendable.
         let mut ctx = self.ctx.clone();
 
-        let payment_gas_limit =
-            self.max_tx_gas_limit.min(ctx.payload.header.gas_limit.saturating_sub(ctx.gas_used()));
+        // Leaves the proposer payment's full gas limit for it to run last.
+        let payment_gas_limit = self.max_tx_gas_limit.min(
+            ctx.payload
+                .header
+                .gas_limit
+                .saturating_sub(ctx.gas_used())
+                .saturating_sub(self.proposer_payment.gas_limit),
+        );
         let safe = eaddr(self.builder_safe);
         let safe_balance =
             balance_of(&mut ctx.vm, safe).map_err(|e| MergeError::Internal(e.to_string()))?;
@@ -867,6 +870,25 @@ impl MergeSession {
         if !ctx.receipts.last().map(|r| r.succeeded).unwrap_or(false) {
             return Err(MergeError::RevenueAllocationReverted);
         }
+
+        let proposer_balance = balance_of(&mut ctx.vm, self.proposer)
+            .map_err(|e| MergeError::Internal(e.to_string()))?;
+        let head = HeadTransaction {
+            tx: ethrex_common::types::MempoolTransaction::new(
+                self.proposer_payment.tx.clone(),
+                self.proposer_payment.sender,
+            ),
+            tip: self.proposer_payment.tx.effective_gas_tip(Some(base_fee)).unwrap_or_default(),
+        };
+        self.blockchain
+            .apply_tx_to_payload(head, &mut ctx)
+            .map_err(|e| MergeError::Internal(format!("proposer payment failed: {e}")))?;
+        let proposer_balance_after = balance_of(&mut ctx.vm, self.proposer)
+            .map_err(|e| MergeError::Internal(e.to_string()))?;
+        if au256(proposer_balance_after.saturating_sub(proposer_balance)) < self.base_value {
+            return Err(MergeError::InvalidPayment);
+        }
+        let payment_index = ctx.payload.body.transactions.len() - 1;
 
         self.blockchain
             .extract_requests(&mut ctx)
@@ -943,10 +965,11 @@ impl MergeSession {
         if let Some(adjustment) = adjustment &&
             let Some(state_trie) = state_trie
         {
+            let builder = aaddr(self.proposer_payment.sender);
             let snapshot = AdjustmentSnapshot {
                 parent_beacon_block_root: ctx.payload.header.parent_beacon_block_root.map(b256),
-                payment_index: self.payment_index,
-                builder: self.beneficiary_alloy,
+                payment_index,
+                builder,
                 proposer: proposer_fee_recipient,
                 fee_payer: adjustment.fee_payer,
                 block: (*merged).clone(),
@@ -954,8 +977,8 @@ impl MergeSession {
                     state_trie,
                     &ctx.payload.body.transactions,
                     &ctx.receipts,
-                    self.payment_index,
-                    self.beneficiary_alloy,
+                    payment_index,
+                    builder,
                     proposer_fee_recipient,
                     adjustment,
                 ),
@@ -1021,8 +1044,7 @@ impl MergeSession {
             emit_no_revenue = self.stats.emit_no_revenue,
             emit_unprofitable = self.stats.emit_unprofitable,
             emit_throttled = self.stats.emit_throttled,
-            adjustment_related_balance_reads = self.stats.adjustment_related_balance_reads,
-            adjustment_conflicts = self.stats.adjustment_conflicts,
+            payment_conflicts = self.stats.payment_conflicts,
             "merge session stats"
         );
     }
