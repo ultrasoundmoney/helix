@@ -18,7 +18,7 @@ use ethrex_common::types::{ELASTICITY_MULTIPLIER, calculate_base_fee_per_gas};
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
 use helix_tcp_types::merging::{
-    builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1},
+    builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1, UnmergedReason, UnmergedTx},
     control::RelayConfigV1,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -176,6 +176,9 @@ pub struct MergeSession {
     /// accounts bid adjustment rewrites after the block is built.
     proposer: ethrex_common::Address,
     adjustment_fee_payer: Option<ethrex_common::Address>,
+    /// Why each screened order is not merged, keyed by order id. Applied
+    /// orders are removed.
+    unmerged_orders: FxHashMap<B256, UnmergedReason>,
     stats: MergeStats,
     trace: MergeTraceV1,
 }
@@ -463,6 +466,7 @@ impl MergeSession {
             disallow: slot.ofac_filtering.then(|| disallow.clone()),
             proposer,
             adjustment_fee_payer: adjustment_fee_payer.map(eaddr),
+            unmerged_orders: FxHashMap::default(),
             stats: MergeStats::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
         };
@@ -476,20 +480,25 @@ impl MergeSession {
         self.trace.sim_start_ns = utcnow_ns();
         let header = self.ctx.payload.header.clone();
 
-        let candidates: Vec<usize> = (0..orders.len())
-            .filter(|&ix| {
-                let order = &orders[ix];
-                !self.applied_orders.contains(&order.order_id) &&
-                    order.source_block_hash != self.base_block_hash &&
-                    simulate::gate_order(
-                        order,
-                        &self.tx_hashes,
-                        self.available_gas(),
-                        self.available_blobs(),
-                    )
-                    .is_ok()
-            })
-            .collect();
+        let mut candidates = Vec::new();
+        for (ix, order) in orders.iter().enumerate() {
+            if self.applied_orders.contains(&order.order_id) ||
+                order.source_block_hash == self.base_block_hash
+            {
+                continue;
+            }
+            match simulate::gate_order(
+                order,
+                &self.tx_hashes,
+                self.available_gas(),
+                self.available_blobs(),
+            ) {
+                Ok(()) => candidates.push(ix),
+                Err(err) => {
+                    self.unmerged_orders.insert(order.order_id, err.unmerged_reason());
+                }
+            }
+        }
         if candidates.is_empty() {
             return false;
         }
@@ -524,6 +533,7 @@ impl MergeSession {
                 Ok(order) => simulated.push(order),
                 Err(err) => {
                     self.stats.count_sim_error(&err);
+                    self.unmerged_orders.insert(orders[ix].order_id, err.unmerged_reason());
                     debug!(order = %orders[ix].order_id, %err, "order presim discarded");
                 }
             }
@@ -536,10 +546,12 @@ impl MergeSession {
         for candidate in simulated {
             let order = &orders[candidate.order_ix];
             match self.try_apply(order, &header) {
-                Ok(true) => changed = true,
-                Ok(false) => {}
-                Err(err) => {
-                    debug!(order = %order.order_id, %err, "order apply skipped");
+                Ok(()) => {
+                    changed = true;
+                    self.unmerged_orders.remove(&order.order_id);
+                }
+                Err(reason) => {
+                    self.unmerged_orders.insert(order.order_id, reason);
                 }
             }
         }
@@ -548,29 +560,39 @@ impl MergeSession {
         changed
     }
 
+    /// Orders gone from the pool since they were screened, such as revoked
+    /// ones, are left out.
+    fn unmerged_txs(&self, orders: &[PreparedOrder]) -> Vec<UnmergedTx> {
+        let mut unmerged = Vec::with_capacity(self.unmerged_orders.len());
+        unmerged.extend(
+            orders
+                .iter()
+                .filter_map(|order| {
+                    self.unmerged_orders.get(&order.order_id).map(|&reason| (order, reason))
+                })
+                .flat_map(|(order, reason)| {
+                    order.txs.iter().map(move |tx| UnmergedTx { tx_hash: tx.hash, reason })
+                }),
+        );
+        unmerged
+    }
+
     /// Re-simulates `order` against the live state and, when still profitable,
-    /// applies it for real. Rolls the context back on any violation.
+    /// applies it for real. Rolls the context back on any violation, and says
+    /// why it was not merged.
     fn try_apply(
         &mut self,
         order: &PreparedOrder,
         header: &ethrex_common::types::BlockHeader,
-    ) -> Result<bool, MergeError> {
-        if simulate::gate_order(
-            order,
-            &self.tx_hashes,
-            self.available_gas(),
-            self.available_blobs(),
-        )
-        .is_err()
-        {
-            return Ok(false);
-        }
+    ) -> Result<(), UnmergedReason> {
+        simulate::gate_order(order, &self.tx_hashes, self.available_gas(), self.available_blobs())
+            .map_err(|err| err.unmerged_reason())?;
 
         if let Some(disallow) = &self.disallow &&
             order.txs.iter().any(|tx| disallow.contains(&tx.sender))
         {
             self.stats.presim_disallowed += 1;
-            return Ok(false);
+            return Err(UnmergedReason::Invalid);
         }
 
         // Re-sim on the current state: earlier appends may have invalidated it.
@@ -579,7 +601,7 @@ impl MergeSession {
             sim_vm.db.accessed_accounts = Some(FxHashSet::default());
         }
         sim_vm.db.balance_reads = Some(FxHashSet::default());
-        let simulated = match simulate::simulate_order(
+        let simulated = simulate::simulate_order(
             &mut sim_vm,
             header,
             order,
@@ -587,10 +609,8 @@ impl MergeSession {
             self.available_gas(),
             self.available_blobs(),
             self.beneficiary,
-        ) {
-            Ok(simulated) => simulated,
-            Err(_) => return Ok(false),
-        };
+        )
+        .map_err(|err| err.unmerged_reason())?;
 
         // `accessed_accounts` records every `load_account` before it consults
         // the cache, so this is the order's whole footprint at any call depth,
@@ -603,7 +623,7 @@ impl MergeSession {
                 .is_some_and(|accessed| accessed.iter().any(|a| disallow.contains(a)))
         {
             self.stats.presim_disallowed += 1;
-            return Ok(false);
+            return Err(UnmergedReason::Invalid);
         }
 
         let adjusted_balance_read = sim_vm.db.balance_reads.as_ref().and_then(|reads| {
@@ -624,7 +644,7 @@ impl MergeSession {
                 adjusted_balance_read == Some(self.beneficiary)
             {
                 self.stats.adjustment_conflicts += 1;
-                return Ok(false);
+                return Err(UnmergedReason::Invalid);
             }
         }
 
@@ -643,7 +663,7 @@ impl MergeSession {
 
         let base_fee = self.ctx.payload.header.base_fee_per_gas;
         let mut applied_hashes = Vec::new();
-        let mut rollback = false;
+        let mut rollback = None;
         for (i, decoded) in order.txs.iter().enumerate() {
             if !simulated.include_tx[i] {
                 continue;
@@ -659,7 +679,7 @@ impl MergeSession {
                 Ok(()) => {
                     let succeeded = self.ctx.receipts.last().map(|r| r.succeeded).unwrap_or(false);
                     if !succeeded && !order.can_revert(i) {
-                        rollback = true;
+                        rollback = Some(UnmergedReason::Invalid);
                         break;
                     }
                     applied_hashes.push(decoded.hash);
@@ -667,18 +687,18 @@ impl MergeSession {
                     self.appended_blobs.extend(decoded.blob_hashes.iter().copied());
                 }
                 Err(_) => {
-                    rollback = true;
+                    rollback = Some(UnmergedReason::Invalid);
                     break;
                 }
             }
             if self.ctx.gas_used() > self.gas_soft_limit {
-                rollback = true;
+                rollback = Some(UnmergedReason::OutOfSpace);
                 break;
             }
         }
 
-        if rollback || applied_hashes.is_empty() {
-            if rollback {
+        if rollback.is_some() || applied_hashes.is_empty() {
+            if rollback.is_some() {
                 self.stats.apply_rollbacks += 1;
             }
             self.ctx.vm.db = vm_snapshot;
@@ -693,7 +713,7 @@ impl MergeSession {
             self.ctx.receipts.truncate(receipts_len);
             self.blob_count = blob_snapshot.0;
             self.appended_blobs.truncate(blob_snapshot.1);
-            return Ok(false);
+            return Err(rollback.unwrap_or(UnmergedReason::Invalid));
         }
 
         // Commit bookkeeping.
@@ -718,7 +738,7 @@ impl MergeSession {
         });
         entry.revenue += simulated.builder_payment;
         entry.txs.extend(applied_hashes);
-        Ok(true)
+        Ok(())
     }
 
     /// Builds the distribution tx on a clone of the live context, finalizes it
@@ -729,6 +749,7 @@ impl MergeSession {
         &mut self,
         slot_number: u64,
         proposer_fee_recipient: Address,
+        orders: &[PreparedOrder],
         relay_config: &RelayConfigV1,
         engine_config: &EngineConfig,
     ) -> Result<EmitOutcome, MergeError> {
@@ -938,6 +959,7 @@ impl MergeSession {
             builder_inclusions,
             included_order_ids: self.included_order_ids.clone(),
             trace: self.trace,
+            unmerged_txs: self.unmerged_txs(orders),
         });
 
         if let Some(adjustment) = adjustment &&

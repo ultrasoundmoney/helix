@@ -16,7 +16,7 @@ use ethrex_common::types::ELASTICITY_MULTIPLIER;
 use ethrex_config::networks::Network;
 use ethrex_storage::{EngineType, Store};
 use helix_tcp_types::merging::{
-    builder_to_relay::RejectCode,
+    builder_to_relay::{RejectCode, UnmergedReason, UnmergedTx},
     control::{BuilderCollateral, RelayConfigV1},
     order::{MergeOrderRef, TxOrderRef},
     relay_to_builder::{MergeableBlockV1, RevokeOrderV1, SlotStartV1},
@@ -507,6 +507,43 @@ async fn revoke_removes_pooled_order_before_it_applies() {
         output_rx.try_recv().is_err(),
         "base alone with its only order revoked before activation must not emit"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unmerged_orders_are_emitted_with_their_reason() {
+    let fixture = Fixture::new().await;
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let donor_msg = fixture.donor(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+
+    // No tip and no transfer to the coinbase: pays the winning builder nothing.
+    let unpaying_tx = signed_transfer(
+        &fixture.signers[7],
+        fixture.chain_id,
+        0,
+        Address::repeat_byte(0x66),
+        U256::from(1),
+        100 * GWEI,
+        0,
+    );
+    let mut unpaying_msg = fixture.donor(&base_msg, 7, U256::ZERO, 0xee);
+    unpaying_msg.execution_payload.payload_inner.payload_inner.transactions =
+        vec![unpaying_tx.clone().into()];
+
+    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_msg, 1));
+    engine.handle_event(mergeable_event(&donor_msg, 2));
+    engine.handle_event(mergeable_event(&unpaying_msg, 3));
+    engine.handle_event(activate_event(base_block_hash));
+    engine.merge_pass();
+
+    let merged = expect_merged(output_rx.try_recv().expect("emission"));
+
+    assert_eq!(merged.unmerged_txs, vec![UnmergedTx {
+        tx_hash: keccak256(&unpaying_tx),
+        reason: UnmergedReason::ZeroPayment,
+    }]);
 }
 
 /// The rebuilt post-state is the merged block's own, and every proof hangs

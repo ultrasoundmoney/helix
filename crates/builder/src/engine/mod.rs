@@ -487,7 +487,7 @@ impl MergeEngine {
         if !changed && !session.pending_emission && !session.has_pending_revenue() {
             return;
         }
-        match session.emit(*slot, *proposer_fee_recipient, &relay_config, &self.config) {
+        match session.emit(*slot, *proposer_fee_recipient, orders, &relay_config, &self.config) {
             Ok(EmitOutcome::Emitted(msg)) => {
                 let _ = self.out.send(EngineOutput::Merged { generation: self.generation, msg });
             }
