@@ -4,6 +4,7 @@
 //! ethrex-related stays behind this boundary.
 
 pub mod convert;
+pub mod disallow;
 pub mod error;
 pub mod payment;
 pub mod session;
@@ -32,6 +33,7 @@ use helix_tcp_types::merging::{
     },
     relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
+use rustc_hash::FxHashSet;
 use ssz::Decode;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
@@ -60,6 +62,8 @@ pub enum EngineEvent {
     },
     /// Distribution policy; takes effect at the next `SlotStart`.
     RelayConfig(RelayConfigV1),
+    /// Refreshed sanctions list; takes effect at the next `SlotStart`.
+    Disallow(Arc<FxHashSet<ethrex_common::Address>>),
     SlotStart(SlotStartV1),
     SlotEnd {
         slot: u64,
@@ -116,6 +120,9 @@ pub struct MergeEngine {
     generation: u64,
     /// Latest relay config; snapshotted into the slot at `SlotStart`.
     relay_config: Option<Arc<RelayConfigV1>>,
+    /// Sanctions list, refreshed out of band. Snapshotted into slots whose
+    /// proposer registered the OFAC filter.
+    disallow: Arc<FxHashSet<ethrex_common::Address>>,
     slot: Option<SlotState>,
     /// Per-builder merge streams; `None` when disabled.
     streams: Option<MergeStreams>,
@@ -150,12 +157,14 @@ impl MergeEngine {
                     )
                 });
                 drop(event_tx);
+                let disallow = config.disallow.clone();
                 let mut engine = MergeEngine {
                     config,
                     head,
                     out,
                     generation: 0,
                     relay_config: None,
+                    disallow,
                     slot: None,
                     streams,
                 };
@@ -229,6 +238,11 @@ impl MergeEngine {
                 self.relay_config = Some(Arc::new(config));
                 false
             }
+            EngineEvent::Disallow(disallow) => {
+                info!(count = disallow.len(), "disallow list updated");
+                self.disallow = disallow;
+                false
+            }
             EngineEvent::SlotStart(msg) => {
                 if let Some(slot) = &self.slot {
                     if msg.slot < slot.slot {
@@ -241,7 +255,7 @@ impl MergeEngine {
                 }
                 debug!(slot = msg.slot, parent_hash = %msg.parent_hash, "slot start");
                 self.teardown_slot("slot_start");
-                let mut state = SlotState::new(&msg);
+                let mut state = SlotState::new(&msg, &self.disallow);
                 state.shared = self.relay_config.clone().map(|relay_config| {
                     Arc::new(SharedSlot {
                         ctx: state.ctx.clone(),

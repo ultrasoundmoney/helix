@@ -149,6 +149,7 @@ fn main() -> eyre::Result<()> {
             ),
             rebase_recovery_bps: merging_config.speculation.rebase_recovery_bps,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
+            disallow: Default::default(),
         };
         let _engine = MergeEngine::spawn(
             engine_config,

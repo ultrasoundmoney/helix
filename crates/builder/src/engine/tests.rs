@@ -111,6 +111,7 @@ impl Fixture {
             max_builder_streams: 8,
             speculation_top_k: 0,
             replay_worker_cores: Vec::new(),
+            disallow: Default::default(),
         }
     }
 
@@ -131,6 +132,7 @@ impl Fixture {
             parent_hash: b256(self.genesis_hash),
             proposer_fee_recipient: self.proposer,
             parent_beacon_block_root: B256::ZERO,
+            ofac_filtering: false,
         }
     }
 
@@ -313,6 +315,7 @@ impl Fixture {
             out: output_tx,
             generation: 0,
             relay_config: None,
+            disallow: Default::default(),
             slot: None,
             streams,
         };
@@ -568,7 +571,8 @@ async fn checkpoint_hit_reuses_shared_prefix_on_resubmission() {
         "the two bases must share a prefix for the checkpoint to be reusable"
     );
 
-    let ctx = crate::engine::types::SlotState::new(&fixture.slot_start()).ctx.clone();
+    let ctx =
+        crate::engine::types::SlotState::new(&fixture.slot_start(), &Default::default()).ctx.clone();
     let prepared_a = fixture.prepared_block(&base_a, 0);
     let prepared_b = fixture.prepared_block(&base_b, 1);
 
@@ -1145,7 +1149,7 @@ fn stream_job(
 }
 
 fn shared_slot(fixture: &Fixture) -> Arc<crate::engine::types::SharedSlot> {
-    let state = crate::engine::types::SlotState::new(&fixture.slot_start());
+    let state = crate::engine::types::SlotState::new(&fixture.slot_start(), &Default::default());
     Arc::new(crate::engine::types::SharedSlot {
         ctx: state.ctx.clone(),
         relay_config: Arc::new(fixture.relay_config.clone()),

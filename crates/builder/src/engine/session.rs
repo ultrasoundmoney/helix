@@ -90,11 +90,13 @@ pub struct MergeStats {
     pub presim_revert_not_allowed: u64,
     pub presim_drop_not_allowed: u64,
     pub presim_execution_error: u64,
+    pub presim_disallowed: u64,
     pub orders_applied: u64,
     pub apply_rollbacks: u64,
     pub emissions: u64,
     pub emit_not_improved: u64,
     pub emit_no_revenue: u64,
+    pub emit_unprofitable: u64,
     pub emit_throttled: u64,
     pub orders_excluded_skipped: u64,
 }
@@ -192,6 +194,8 @@ pub struct MergeSession {
     /// A throttled improvement is waiting; the worker retries after the
     /// spacing window even with no further inbound events.
     pub pending_emission: bool,
+    /// Some only when this slot's proposer registered the OFAC filter.
+    disallow: Option<Arc<FxHashSet<ethrex_common::Address>>>,
     stats: MergeStats,
     /// Last screening outcome per order, with its priority-fee headroom. Kept
     /// per order rather than per screening: `try_extend` re-screens the same
@@ -371,6 +375,16 @@ impl MergeSession {
         let mut snapshot_us = 0u64;
         let mut proposer_balance_before_payment = None;
         let mut new_checkpoint = None;
+        if let Some(disallow) = &slot.disallow {
+            for address in [beneficiary, proposer] {
+                if disallow.contains(&address) {
+                    return Err(MergeError::InvalidBaseBlock(format!(
+                        "base block pays a disallowed address {address:#x}"
+                    )));
+                }
+            }
+            ctx.vm.db.accessed_accounts = Some(FxHashSet::default());
+        }
         for (ix, decoded) in base.txs.iter().enumerate().skip(replay_from) {
             if decoded.tx.gas_limit() > ctx.remaining_gas {
                 return Err(MergeError::InvalidBaseBlock("base block exceeds gas limit".into()));
@@ -404,20 +418,21 @@ impl MergeSession {
                 .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
             tx_hashes.insert(decoded.hash);
         }
+        if let Some(disallow) = &slot.disallow {
+            let touched = ctx.vm.db.accessed_accounts.take();
+            if let Some(address) =
+                touched.and_then(|accessed| accessed.into_iter().find(|a| disallow.contains(a)))
+            {
+                return Err(MergeError::InvalidBaseBlock(format!(
+                    "base block touches a disallowed address {address:#x}"
+                )));
+            }
+        }
         metrics::stage_latency(
             "replay_txs",
             (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
         );
         metrics::stage_latency("replay_snapshot", snapshot_us);
-        let probe_start = Instant::now();
-        {
-            let mut probe = ctx.vm.clone();
-            if let Ok(updates) = probe.get_state_transitions() {
-                let slots: usize = updates.iter().map(|u| u.added_storage.len()).sum();
-                metrics::account_updates("base", updates.len(), slots);
-            }
-        }
-        metrics::stage_latency("replay_state_probe", probe_start.elapsed().as_micros() as u64);
         let new_checkpoint = new_checkpoint
             .expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
@@ -473,6 +488,7 @@ impl MergeSession {
             best_emitted: U256::ZERO,
             last_emit: None,
             pending_emission: false,
+            disallow: slot.disallow.clone(),
             stats: MergeStats::default(),
             order_outcomes: FxHashMap::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
@@ -672,9 +688,19 @@ impl MergeSession {
             return Ok(false);
         }
 
+        if let Some(disallow) = &self.disallow &&
+            order.txs.iter().any(|tx| disallow.contains(&tx.sender))
+        {
+            self.stats.presim_disallowed += 1;
+            return Ok(false);
+        }
+
         // Re-sim on the current state: earlier appends may have invalidated it.
         let resim_start = Instant::now();
         let mut sim_vm = self.ctx.vm.clone();
+        if self.disallow.is_some() {
+            sim_vm.db.accessed_accounts = Some(FxHashSet::default());
+        }
         let simulated = match simulate::simulate_order(
             &mut sim_vm,
             header,
@@ -688,6 +714,20 @@ impl MergeSession {
             Err(_) => return Ok(false),
         };
         metrics::stage_latency("apply_resim", resim_start.elapsed().as_micros() as u64);
+
+        // `accessed_accounts` records every `load_account` before it consults
+        // the cache, so this is the order's whole footprint at any call depth,
+        // including addresses the base replay had already loaded.
+        if let Some(disallow) = &self.disallow &&
+            sim_vm
+                .db
+                .accessed_accounts
+                .as_ref()
+                .is_some_and(|accessed| accessed.iter().any(|a| disallow.contains(a)))
+        {
+            self.stats.presim_disallowed += 1;
+            return Ok(false);
+        }
 
         // Snapshot for rollback.
         let txs_start = Instant::now();
@@ -821,6 +861,14 @@ impl MergeSession {
             relay_config.relay_fee_recipient,
             self.beneficiary_alloy,
         );
+
+        let relay_revenue =
+            updated_revenues.get(&relay_config.relay_fee_recipient).cloned().unwrap_or_default();
+        if relay_revenue <= estimated_payment_cost {
+            self.stats.emit_unprofitable += 1;
+            return Ok(EmitOutcome::NotImproved);
+        }
+
         let proposer_added_value =
             updated_revenues.get(&proposer_fee_recipient).cloned().unwrap_or_default();
         let proposer_value = self.base_value + proposer_added_value;
@@ -1051,9 +1099,11 @@ impl MergeSession {
             revert_not_allowed = self.stats.presim_revert_not_allowed,
             drop_not_allowed = self.stats.presim_drop_not_allowed,
             execution_error = self.stats.presim_execution_error,
+            disallowed = self.stats.presim_disallowed,
             emissions = self.stats.emissions,
             emit_not_improved = self.stats.emit_not_improved,
             emit_no_revenue = self.stats.emit_no_revenue,
+            emit_unprofitable = self.stats.emit_unprofitable,
             emit_throttled = self.stats.emit_throttled,
             orders_seen = self.order_outcomes.len(),
             value_applied_gwei = metrics::gwei(applied),
