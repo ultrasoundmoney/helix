@@ -130,18 +130,18 @@ pub fn build_payment_tx(
     inputs: &PaymentInputs,
     updated_revenues: &FxHashMap<Address, U256>,
 ) -> Result<Vec<u8>, MergeError> {
-    // The safeTxGas parameter tells the Safe contract how much gas the internal
-    // transaction should have; 80% of the tx gas limit leaves margin for the
-    // Safe's own overhead (signature verification etc).
-    let safe_tx_gas = inputs.gas_limit.saturating_mul(80) / 100;
-
+    // Zero safeTxGas with a zero gasPrice hands the payout all remaining gas,
+    // and the Safe reverts the whole tx if it fails (GS013), so a failed
+    // payout shows as a failed receipt. A nonzero value must pass GS010,
+    // gasleft() >= safeTxGas * 64 / 63 + 500 at entry, which any large
+    // fraction of a ~140k limit cannot once intrinsic gas is paid.
     let calldata = encode_multisend_calldata(
         updated_revenues,
         inputs.safe,
         inputs.safe_balance,
         inputs.safe_nonce,
         inputs.multisend_contract,
-        U256::from(safe_tx_gas),
+        U256::ZERO,
         inputs.chain_id,
         signer,
     )?;
