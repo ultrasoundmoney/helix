@@ -1,0 +1,44 @@
+# Builds and pushes a git-sha-tagged merge-builder image, `workflow_dispatch`
+# only: run it against the ref to deploy, e.g.
+# `gh workflow run build-merge-builder.yaml --ref main`.
+#
+# The relay must pin helix-tcp-types to the same commit the image is built
+# from, or the two ends disagree about the wire format.
+
+name: Build and Push merge-builder Image
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  docker:
+    runs-on:
+      group: Default
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          # The token's own account; it needs write on ultrasoundorg/merge-builder.
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract short SHA
+        run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c 1-7)" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          name: merge-builder-builder
+          keep-state: true
+
+      - name: Build and push merge-builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: builder.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ultrasoundorg/merge-builder:${{ env.SHORT_SHA }}
