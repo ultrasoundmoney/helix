@@ -1,6 +1,7 @@
-# Builds and pushes a git-sha-tagged merge-builder image, `workflow_dispatch`
-# only: run it against the ref to deploy, e.g.
-# `gh workflow run build-merge-builder.yaml --ref main`.
+# Builds and pushes a git-sha-tagged merge-builder image on every push to main.
+# A push-triggered workflow runs from the pushed commit's own copy, so this
+# works while the fork's default branch is still develop; manual runs only
+# appear once this file is on the default branch.
 #
 # The relay must pin helix-tcp-types to the same commit the image is built
 # from, or the two ends disagree about the wire format.
@@ -8,6 +9,8 @@
 name: Build and Push merge-builder Image
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
 jobs:
