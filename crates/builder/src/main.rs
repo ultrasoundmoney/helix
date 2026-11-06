@@ -20,6 +20,7 @@ mod server;
 mod spine;
 #[cfg(test)]
 mod testing;
+mod ultrasound;
 mod utils;
 mod validation;
 
@@ -29,6 +30,7 @@ use config::{BuildingConfig, MergingConfig, Roles, SimulationConfig};
 use merge::{EngineConfig, MergeEngine};
 use server::MergingServerTile;
 use spine::{BuilderSpine, BuilderSpineConfig, EngineCursor};
+use ultrasound::relay_key::LockedKey;
 use validation::{BlockValidator, server as validation_server};
 
 #[global_allocator]
@@ -45,14 +47,18 @@ fn main() -> eyre::Result<()> {
     let building_config = cli.build_config.as_deref().map(BuildingConfig::load).transpose()?;
     let roles = Roles::resolve(merging_config, simulation_config, building_config)?;
 
-    // Fail fast on a missing/invalid RELAY_KEY, before the node boots.
-    let relay_signer = roles.merging().map(|merging_config| {
-        info!(listen_addr = %merging_config.listen_addr, "Loaded merging config");
-        if merging_config.enable_flux_profiler {
-            flux_profiler::enable_profiler("helix-builder");
-        }
-        EngineConfig::load_relay_signer()
-    });
+    // Fail fast on missing key ceremony settings, before the node boots. The key itself is only
+    // decrypted once an operator posts the KEK, right before merging starts.
+    let relay_key = roles
+        .merging()
+        .map(|merging_config| {
+            info!(listen_addr = %merging_config.listen_addr, "Loaded merging config");
+            if merging_config.enable_flux_profiler {
+                flux_profiler::enable_profiler("helix-builder");
+            }
+            LockedKey::from_env()
+        })
+        .transpose()?;
 
     // Same, for the building role's own two keys.
     let building_keys = match roles.building() {
@@ -87,6 +93,7 @@ fn main() -> eyre::Result<()> {
         .map(|config| config.blacklist_endpoint.clone())
         .or_else(|| roles.merging().map(|config| config.blacklist_endpoint.clone()));
     if let Some(endpoint) = blacklist_endpoint {
+        runtime.block_on(ultrasound::blacklist::load_or_fail(&endpoint, &disallow))?;
         runtime.spawn(validation_server::refresh_blacklist(endpoint, disallow.clone()));
     }
 
@@ -143,7 +150,8 @@ fn main() -> eyre::Result<()> {
 
     // `BuilderSpine::start` blocks until its tiles stop, so merging starts last.
     if let Some(merging_config) = roles.merging() {
-        let relay_signer = relay_signer.expect("the merging role loads a relay signer");
+        let relay_key = relay_key.expect("the merging role loads a relay key");
+        let relay_signer = runtime.block_on(relay_key.unlock())?;
 
         let engine_config = EngineConfig {
             relay_signer,

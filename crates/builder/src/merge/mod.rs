@@ -52,8 +52,6 @@ use crate::{
     utils::utcnow_ns,
 };
 
-pub const RELAY_KEY_ENV: &str = "RELAY_KEY";
-
 pub const STACK_SIZE: usize = 32 << 20;
 
 pub struct EngineConfig {
@@ -67,14 +65,6 @@ pub struct EngineConfig {
     pub warmup: bool,
     pub blacklist: Arc<DashSet<Address>>,
     pub record: Option<RecordConfig>,
-}
-
-impl EngineConfig {
-    pub fn load_relay_signer() -> PrivateKeySigner {
-        let key = std::env::var(RELAY_KEY_ENV)
-            .unwrap_or_else(|_| panic!("{RELAY_KEY_ENV} env var not set"));
-        key.parse().expect("failed to parse RELAY_KEY")
-    }
 }
 
 struct Builder {
