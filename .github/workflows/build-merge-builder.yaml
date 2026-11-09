@@ -1,47 +1,58 @@
-# Builds and pushes a git-sha-tagged merge-builder image on every push to main.
-# A push-triggered workflow runs from the pushed commit's own copy, so this
-# works while the fork's default branch is still develop; manual runs only
-# appear once this file is on the default branch.
+# Builds and pushes a git-sha-tagged merge-builder image, `workflow_dispatch`
+# only: `gh workflow run build-merge-builder.yaml --ref main`.
 #
-# The relay must pin helix-tcp-types to the same commit the image is built
-# from, or the two ends disagree about the wire format.
+# GitHub-hosted on purpose, like our reth fork's docker-git: this repo is public,
+# so a pull request could otherwise run code on our self-hosted runners.
+#
+# A copy of this file sits on the default branch, develop, only so GitHub offers
+# the manual run. A run uses the copy on the ref it is given.
+#
+# The relay must pin helix-tcp-types to a commit with the same wire types as the
+# image, or the two ends disagree about the wire format.
 
 name: Build and Push merge-builder Image
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
+
+env:
+  DOCKER_IMAGE_NAME: ultrasoundorg/merge-builder
+  BUILD_PLATFORMS: linux/amd64
 
 jobs:
   docker:
-    runs-on:
-      group: Default
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Failing on disk space would only show up after a full compile.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /usr/lib/jvm "$AGENT_TOOLSDIRECTORY"
+          df -h /
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           # The token's own account; it needs write on ultrasoundorg/merge-builder.
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract short SHA
-        run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c 1-7)" >> $GITHUB_ENV
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          name: merge-builder-builder
-          keep-state: true
+      - name: Set up Docker builder
+        run: docker buildx create --use --name merge-builder-builder
 
       - name: Build and push merge-builder image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: builder.Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ultrasoundorg/merge-builder:${{ env.SHORT_SHA }}
+        run: |
+          docker buildx build --file ./builder.Dockerfile . \
+            --platform "${BUILD_PLATFORMS}" \
+            --tag "${DOCKER_IMAGE_NAME}:${SHORT_SHA}" \
+            --provenance=false \
+            --push
